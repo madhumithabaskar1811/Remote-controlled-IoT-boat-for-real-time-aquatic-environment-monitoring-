@@ -1,0 +1,139 @@
+#include <WiFi.h>
+#include <Wire.h>
+#include <Adafruit_SSD1306.h>
+#include <DHT.h>
+#include <SoftwareSerial.h>
+#include "ThingSpeak.h"
+
+// WiFi credentials 
+const char* ssid = "DON";
+const char* password = "12345678";
+
+// ThingSpeak settings
+WiFiClient client;
+unsigned long myChannelNumber = 2938524;  // Replace with your channel number
+const char * myWriteAPIKey = "VBGNZEGXSG3A4KRP";
+
+// OLED setup
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 32
+#define OLED_RESET -1
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// DHT setup
+#define DHTPIN 4
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// Sensor pins
+#define PH_PIN 34
+#define TURBIDITY_PIN 35
+
+// GPS setup
+SoftwareSerial gpsSerial(16, 17);  // RX, TX for GPS
+
+// GPS data placeholders
+String gpsData = "";
+String latitude = "0.0";
+String longitude = "0.0";
+
+void setup() {
+  Serial.begin(115200);
+  gpsSerial.begin(9600);
+  dht.begin();
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+  display.clearDisplay();
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Connected!");
+
+  ThingSpeak.begin(client);
+}
+
+void loop() {
+  float temp = dht.readTemperature();
+  float humidity = dht.readHumidity();
+  int phValue = analogRead(PH_PIN);
+  int turbidityValue = analogRead(TURBIDITY_PIN);
+  float ph = (phValue * 14.0) / 4095.0;
+
+  // Placeholder GPS parsing (expandable with TinyGPS++)
+  while (gpsSerial.available()) {
+    gpsData = gpsSerial.readStringUntil('\n');
+    if (gpsData.startsWith("$GPGGA")) {
+      // Parse with TinyGPS++ if needed
+    }
+  }
+
+  // Water quality based on pH
+  String waterQuality = "";
+  if (ph < 3) {
+    waterQuality = "Very Acidic";
+  } else if (ph < 6.5) {
+    waterQuality = "Acidic";
+  } else if (ph <= 8.5) {
+    waterQuality = "Neutral/Safe";
+  } else if (ph <= 9.5) {
+    waterQuality = "Alkaline";
+  } else {
+    waterQuality = "Very Alkaline";
+  }
+
+  // Usage recommendation based on pH and turbidity
+  String usageRecommendation = "";
+  if (ph >= 6.5 && ph <= 8.5 && turbidityValue < 1000) {
+    usageRecommendation = "Safe for Drinking";
+  } else if (ph >= 6.0 && ph <= 9.0 && turbidityValue < 2000) {
+    usageRecommendation = "Good for Irrigation";
+  } else if (ph >= 5.5 && ph <= 9.5 && turbidityValue < 3000) {
+    usageRecommendation = "Usable for Cleaning";
+  } else {
+    usageRecommendation = "Not Safe for Use";
+  }
+
+  // Serial output
+  Serial.println("----- Sensor Data -----");
+  Serial.print("Temp: "); Serial.println(temp);
+  Serial.print("Humidity: "); Serial.println(humidity);
+  Serial.print("pH: "); Serial.println(ph);
+  Serial.print("Turbidity: "); Serial.println(turbidityValue);
+  Serial.print("Water Quality: "); Serial.println(waterQuality);
+  Serial.print("Usage: "); Serial.println(usageRecommendation);
+  Serial.print("Latitude: "); Serial.println(latitude);
+  Serial.print("Longitude: "); Serial.println(longitude);
+  Serial.println("------------------------");
+
+  // OLED display
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.printf("T:%.1fC H:%.0f%%\n", temp, humidity);
+  display.printf("pH:%.2f Turb:%d\n", ph, turbidityValue);
+  display.printf("Use:%s\n", usageRecommendation.c_str());
+  display.display();
+
+  // Send data to ThingSpeak
+  ThingSpeak.setField(1, temp);
+  ThingSpeak.setField(2, humidity);
+  ThingSpeak.setField(3, ph);
+  ThingSpeak.setField(4, turbidityValue);
+  ThingSpeak.setField(5, latitude);
+  ThingSpeak.setField(6, longitude);
+  ThingSpeak.setField(7, waterQuality);
+  ThingSpeak.setField(8, usageRecommendation);
+
+  int response = ThingSpeak.writeFields(myChannelNumber, myWriteAPIKey);
+  if (response == 200) {
+    Serial.println("Data sent to ThingSpeak successfully.");
+  } else {
+    Serial.print("ThingSpeak Error Code: ");
+    Serial.println(response);
+  }
+
+  delay(20000);  // 20 seconds delay for ThingSpeak
+}
